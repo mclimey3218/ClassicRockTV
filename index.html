@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Channel Surfer · 80's Rock</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&display=swap">
+<style>
+  :root { --room:#14110f; --bezel:#2b2520; --glass:#050505; --osd:#7dff9b; --amber:#ffb347; color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: var(--room); overflow: hidden; font-family: "VT323", ui-monospace, Menlo, Consolas, monospace; color: var(--osd); }
+  .set { position: fixed; inset: 0; padding: clamp(8px, 2.2vmin, 28px); background: var(--bezel); }
+  .tube { position: relative; width: 100%; height: 100%; background: var(--glass); border-radius: 4% / 6%; overflow: hidden; box-shadow: inset 0 0 6vmin #000, 0 0 0 .6vmin #0c0a09; cursor: none; }
+  .tube.active { cursor: default; }
+  .tube iframe, #yt { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  /* Transparent shield over the player: keeps YouTube's own buttons and hover UI out of the picture */
+  .shield { position: absolute; inset: 0; z-index: 3; }
+
+  .glass { position: absolute; inset: 0; pointer-events: none; z-index: 3;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,.18) 0 1px, transparent 1px 3px),
+                radial-gradient(ellipse at center, transparent 62%, rgba(0,0,0,.55) 100%); }
+  canvas#snow { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; opacity: 0; transition: opacity .12s; pointer-events: none; }
+  canvas#snow.on { opacity: 1; }
+
+  .osd { position: absolute; top: 4vmin; right: 5vmin; z-index: 4; font-size: clamp(32px, 7vmin, 72px); text-shadow: 0 0 8px var(--osd); opacity: 0; transition: opacity .4s; pointer-events: none; text-align: right; line-height: 1; }
+  .osd.show { opacity: 1; }
+  .osd small { display: block; font-size: .45em; margin-top: .25em; color: var(--amber); text-shadow: 0 0 6px var(--amber); max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
+
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; padding: 3vmin 2vmin; background: linear-gradient(transparent, rgba(0,0,0,.75)); opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .tube.active .bar { opacity: 1; pointer-events: auto; }
+  button { font: inherit; font-size: clamp(20px, 3.4vmin, 30px); color: var(--osd); background: rgba(10,20,12,.8); border: 1px solid var(--osd); border-radius: 6px; padding: .2em .8em; cursor: pointer; }
+  button:hover, button:focus-visible { background: var(--osd); color: #04120a; outline: none; }
+
+  .power { position: absolute; inset: 0; z-index: 6; display: grid; place-content: center; gap: 2vmin; text-align: center; background: var(--glass); cursor: default; padding: 4vmin; }
+  .power h1 { font-weight: 400; font-size: clamp(44px, 10vmin, 110px); text-shadow: 0 0 14px var(--osd); }
+  .power p { color: var(--amber); font-size: clamp(20px, 3.4vmin, 32px); }
+  .power button { justify-self: center; font-size: clamp(28px, 5vmin, 48px); }
+  .guide { list-style: none; padding: 0; color: var(--osd); font-size: clamp(18px, 3vmin, 28px); line-height: 1.15; text-align: left; justify-self: center; }
+  .guide span { color: var(--amber); }
+  .hidden { display: none; }
+  @media (prefers-reduced-motion: reduce) { .osd, canvas#snow, .bar { transition: none; } }
+</style>
+</head>
+<body>
+<div class="set">
+  <div class="tube" id="tube">
+    <div id="yt"></div>
+    <div class="shield" id="shield"></div>
+    <canvas id="snow"></canvas>
+    <div class="glass"></div>
+    <div class="osd" id="osd"></div>
+
+    <div class="bar">
+      <button id="prev" aria-label="Previous channel">Ch −</button>
+      <button id="next" aria-label="Next channel">Ch +</button>
+      <button id="rew" aria-label="Back 30 seconds">◀◀ 30s</button>
+      <button id="ff" aria-label="Forward 30 seconds">30s ▶▶</button>
+      <button id="skip" aria-label="Next concert on this channel">Next show</button>
+      <button id="pause" aria-label="Pause or resume">Pause</button>
+      <button id="mute" aria-label="Mute or unmute">Mute</button>
+      <button id="fs" aria-label="Toggle full screen">Full screen</button>
+    </div>
+
+    <div class="power" id="power">
+      <h1>Channel Surfer</h1>
+      <p>80's rock, full concerts, six channels. Nonstop.</p>
+      <ol class="guide" id="guide"></ol>
+      <button id="on">Turn on</button>
+      <p>Keys: ↑ ↓ or 1–6 channel · ← → ±30s · N next show · Space pause · M mute · F full screen</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   CHANNEL LINEUP
+   Each channel is a list of YouTube videos (the ID is the part after "v=" in a
+   YouTube link). The first one plays; if it is blocked or removed, the next one
+   on the same channel takes over. When a concert ends, the channel moves to the
+   next video on its list.
+   --------------------------------------------------------------------------- */
+const CHANNELS = [
+  { name: "Van Halen · 1982", videos: [
+      { id: "-xMSrx428ug", title: "Van Halen: Live at the Capitol Centre, 1982" },
+      { id: "jvcpsh_olLU", title: "Van Halen: Capitol Centre 1982, first night" } ] },
+  { name: "Queen · 1986", videos: [
+      { id: "oozJH6jSr2U", title: "Queen: Live at Wembley Stadium, 1986" } ] },
+  { name: "Iron Maiden · 1985", videos: [
+      { id: "20sf-B2KDlI", title: "Iron Maiden: Live After Death, 1985" },
+      { id: "5t_6hI3c6QY", title: "Iron Maiden: Live After Death, Long Beach 1985" } ] },
+  { name: "Def Leppard · 1988", videos: [
+      { id: "DhW41DZKxT4", title: "Def Leppard: Live in Mountain View, 1988" } ] },
+  { name: "Journey · 1981", videos: [
+      { id: "llIXDhy1Ksw", title: "Journey: Live in Houston, 1981" },
+      { id: "CA5w4skVLlI", title: "Journey: Live in Houston 1981, HD remaster" } ] },
+  { name: "Judas Priest · 1982", videos: [
+      { id: "DwXzZ4mFP3k", title: "Judas Priest: Live Vengeance '82" },
+      { id: "v7OZdWBcJYE", title: "Judas Priest: Live in Bethlehem, 1982" } ] }
+];
+
+/* true  = every tune-in drops you into a random spot in the concert, like channel surfing
+   false = every concert starts from the top */
+const RANDOM_START = true;
+
+const $ = id => document.getElementById(id);
+const osd = $("osd"), tube = $("tube");
+let player = null, apiReady = false, powered = false;
+let ch = 0, vi = 0, failed = 0, pendingSeek = false;
+let userMuted = false, autoMuted = false, lastRestore = 0;
+let osdTimer, idleTimer, autoTimer, snowTimer;
+
+$("guide").innerHTML = CHANNELS.map((c, i) => "<li><span>CH " + String(i + 1).padStart(2, "0") + "</span> " + c.name + "</li>").join("");
+
+/* ---------- static ---------- */
+const snow = $("snow"), sx = snow.getContext("2d");
+let snowRAF = 0;
+function drawSnow() {
+  const w = snow.width = 160, h = snow.height = 90, img = sx.createImageData(w, h);
+  for (let i = 0; i < img.data.length; i += 4) { const v = Math.random() * 255; img.data[i] = img.data[i+1] = img.data[i+2] = v; img.data[i+3] = 255; }
+  sx.putImageData(img, 0, 0);
+  snowRAF = requestAnimationFrame(drawSnow);
+}
+function snowOn()  { snow.classList.add("on"); cancelAnimationFrame(snowRAF); drawSnow(); }
+function snowOff() { clearTimeout(snowTimer); snow.classList.remove("on"); cancelAnimationFrame(snowRAF); }
+
+function showOSD(main, sub) {
+  osd.innerHTML = main + (sub ? "<small></small>" : "");
+  if (sub) osd.querySelector("small").textContent = sub;
+  osd.classList.add("show");
+  clearTimeout(osdTimer);
+  osdTimer = setTimeout(() => osd.classList.remove("show"), 3500);
+}
+const chLabel = () => "CH " + String(ch + 1).padStart(2, "0");
+
+/* ---------- YouTube player ---------- */
+window.onYouTubeIframeAPIReady = () => { apiReady = true; if (powered) boot(); };
+const tag = document.createElement("script");
+tag.src = "https://www.youtube.com/iframe_api";
+document.head.appendChild(tag);
+
+function boot() {
+  if (player) return;
+  player = new YT.Player("yt", {
+    width: "100%", height: "100%",
+    playerVars: { autoplay: 1, controls: 0, disablekb: 1, fs: 0, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3 },
+    events: { onReady: () => tune(0), onStateChange: onState, onError: onErr }
+  });
+}
+
+function playCurrent() {
+  const v = CHANNELS[ch].videos[vi];
+  pendingSeek = RANDOM_START;
+  snowOn();
+  player.loadVideoById({ videoId: v.id });
+  if (userMuted) player.mute(); else player.unMute();
+  /* If the browser blocks sound-on autoplay, play muted and unmute on the next click or key press. */
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(() => {
+    const s = player.getPlayerState();
+    if (s !== 1 && s !== 3) {
+      autoMuted = true; player.mute(); player.playVideo();
+      showOSD("NO SOUND", "Click or press any key to turn sound on");
+    }
+  }, 3000);
+}
+
+function tune(n) {
+  ch = (n + CHANNELS.length) % CHANNELS.length;
+  vi = 0; failed = 0;
+  showOSD(chLabel(), CHANNELS[ch].name);
+  playCurrent();
+}
+
+function nextShow() {
+  const list = CHANNELS[ch].videos;
+  vi = (vi + 1) % list.length;
+  showOSD(chLabel(), CHANNELS[ch].name);
+  playCurrent();
+}
+
+function onState(e) {
+  const S = YT.PlayerState;
+  if (e.data === S.PLAYING) {
+    clearTimeout(autoTimer);
+    $("pause").textContent = "Pause";
+    if (pendingSeek) {
+      pendingSeek = false;
+      const d = player.getDuration();
+      if (d > 600) {                                  // jump into the middle of the concert
+        player.seekTo(Math.floor(d * (0.03 + Math.random() * 0.6)), true);
+        snowTimer = setTimeout(snowOff, 1800);        // safety: never leave the static on
+        return;
+      }
+    }
+    failed = 0;
+    snowOff();
+    showOSD(chLabel(), CHANNELS[ch].videos[vi].title);
+  } else if (e.data === S.PAUSED) {
+    $("pause").textContent = "Play";
+  } else if (e.data === S.ENDED) {
+    nextShow();
+  }
+}
+
+function onErr(e) {
+  failed++;
+  if (failed >= CHANNELS[ch].videos.length) {
+    snowOn();
+    const code = e.data;
+    showOSD("NO SIGNAL", (code === 101 || code === 150) ? "The owner blocked embedding of this concert"
+                        : code === 153 ? "Open this page from a web server (http/https), not a file"
+                        : "This concert is unavailable (error " + code + ")");
+    return;
+  }
+  nextShow();                                         // skip a broken video automatically
+}
+
+/* ---------- controls ---------- */
+function toggleFS() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
+}
+function togglePause() {
+  if (!player) return;
+  if (player.getPlayerState() === 1) { player.pauseVideo(); showOSD("PAUSE"); }
+  else player.playVideo();
+}
+function toggleMute() {
+  userMuted = !userMuted; autoMuted = false;
+  if (userMuted) player.mute(); else player.unMute();
+  $("mute").textContent = userMuted ? "Unmute" : "Mute";
+  showOSD(userMuted ? "MUTE" : "VOL");
+}
+function seek(sec) {
+  if (!player) return;
+  player.seekTo(Math.max(0, player.getCurrentTime() + sec), true);
+  showOSD(sec > 0 ? "FF ▶▶" : "◀◀ REW");
+}
+function restoreSound() {
+  if (!autoMuted || !player) return;
+  autoMuted = false; lastRestore = Date.now();
+  if (!userMuted) player.unMute();
+}
+addEventListener("pointerdown", restoreSound);
+addEventListener("keydown", restoreSound);
+
+$("on").onclick = () => {
+  $("power").classList.add("hidden");
+  powered = true;
+  toggleFS();
+  if (apiReady) boot();
+  else {
+    showOSD("WARMING UP");
+    setTimeout(() => { if (!apiReady) showOSD("NO SIGNAL", "Can't reach YouTube. Check your connection"); }, 8000);
+  }
+};
+$("next").onclick = () => player && tune(ch + 1);
+$("prev").onclick = () => player && tune(ch - 1);
+$("rew").onclick = () => seek(-30);
+$("ff").onclick = () => seek(30);
+$("skip").onclick = () => player && nextShow();
+$("pause").onclick = togglePause;
+$("mute").onclick = () => player && toggleMute();
+$("fs").onclick = toggleFS;
+$("shield").onclick = () => { if (Date.now() - lastRestore > 400) togglePause(); };
+
+addEventListener("keydown", e => {
+  if (!$("power").classList.contains("hidden") || !player) return;
+  const k = e.key.toLowerCase();
+  if (e.key === "ArrowUp")    { e.preventDefault(); tune(ch + 1); }
+  if (e.key === "ArrowDown")  { e.preventDefault(); tune(ch - 1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); seek(30); }
+  if (e.key === "ArrowLeft")  { e.preventDefault(); seek(-30); }
+  if (e.key === " ")          { e.preventDefault(); togglePause(); }
+  if (k >= "1" && k <= String(CHANNELS.length)) tune(Number(k) - 1);
+  if (k === "n") nextShow();
+  if (k === "m") toggleMute();
+  if (k === "f") toggleFS();
+});
+
+/* control bar shows on pointer movement, hides when idle */
+function wake() { tube.classList.add("active"); clearTimeout(idleTimer); idleTimer = setTimeout(() => tube.classList.remove("active"), 2800); }
+tube.addEventListener("mousemove", wake);
+tube.addEventListener("touchstart", wake, { passive: true });
+</script>
+</body>
+</html>
